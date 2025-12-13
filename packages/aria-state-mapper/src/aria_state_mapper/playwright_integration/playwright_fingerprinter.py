@@ -7,12 +7,15 @@ platform-agnostic fingerprinting algorithms.
 
 from __future__ import annotations
 from typing import Any, TYPE_CHECKING
+import logging
 
 from model_resilience_core import StateFingerprinter
 from .aria_snapshot import AriaSnapshotCapture
 
 if TYPE_CHECKING:
-    from playwright.async_api import Page
+    from playwright.async_api import Page, Locator
+
+logger = logging.getLogger(__name__)
 
 
 class PlaywrightStateFingerprinter:
@@ -57,4 +60,92 @@ class PlaywrightStateFingerprinter:
         )
         
         return fingerprint
+    
+    async def _get_page_state(self, page: Page) -> dict[str, bool]:
+        """Get page loading/ready state indicators.
+        
+        Args:
+            page: Playwright Page object
+            
+        Returns:
+            Dictionary of state indicators
+        """
+        try:
+            has_errors = await page.locator('[role="alert"]').count() > 0
+            is_loading = await page.locator('[aria-busy="true"]').count() > 0
+            
+            return {
+                "ready": True,  # If we can query, page is ready
+                "has_errors": has_errors,
+                "is_loading": is_loading,
+            }
+        except Exception:
+            return {
+                "ready": False,
+                "has_errors": False,
+                "is_loading": True,
+            }
+    
+    async def _create_element_descriptor(self, locator: Locator, elem_type: str) -> dict[str, Any] | None:
+        """Create resilient multi-strategy locator descriptor.
+        
+        Args:
+            locator: Playwright Locator object
+            elem_type: Element type ("button", "input", "link", etc.)
+            
+        Returns:
+            Element descriptor with prioritized locators, or None
+        """
+        try:
+            descriptor = {
+                "element_type": elem_type,
+                "locators": {},  # Priority-ordered locators
+                "metadata": {}
+            }
+            
+            # Priority 1: data-testid (most stable)
+            test_id = await locator.get_attribute('data-testid')
+            if test_id:
+                descriptor["locators"]["test_id"] = test_id
+                descriptor["metadata"]["test_id"] = test_id
+            
+            # Priority 2: Role + accessible name
+            role = await locator.get_attribute('role')
+            aria_label = await locator.get_attribute('aria-label')
+            if role:
+                descriptor["locators"]["role"] = role
+            if aria_label:
+                descriptor["locators"]["aria_label"] = aria_label
+            
+            # Priority 3: Semantic attributes
+            if elem_type == "input":
+                input_type = await locator.get_attribute('type')
+                placeholder = await locator.get_attribute('placeholder')
+                name = await locator.get_attribute('name')
+                if input_type:
+                    descriptor["locators"]["input_type"] = input_type
+                if placeholder:
+                    descriptor["locators"]["placeholder"] = placeholder
+                if name:
+                    descriptor["locators"]["name"] = name
+            
+            elif elem_type == "link":
+                href = await locator.get_attribute('href')
+                if href:
+                    descriptor["locators"]["href"] = href
+            
+            # Priority 4: Text content
+            text = await locator.text_content()
+            if text and text.strip():
+                descriptor["locators"]["text"] = text.strip()
+                descriptor["name"] = text.strip()  # For friendlier logging
+            
+            # Only return if we have at least one locator
+            if descriptor["locators"]:
+                return descriptor
+            return None
+            
+        except Exception as e:
+            logger.debug("Error creating element descriptor: %s", e)
+            return None
 

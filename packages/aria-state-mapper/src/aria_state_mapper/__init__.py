@@ -7,12 +7,19 @@ using Playwright and accessibility tree analysis.
 
 __version__ = "0.1.0"
 
-from .discovery import UIStateMachineDiscovery
-from .playwright_integration import AriaSnapshotCapture, ElementLocator
+from .discovery import UIStateMachineDiscovery, StateClassifier, UIMapLoader
+from .playwright_integration import (
+    AriaSnapshotCapture,
+    ElementLocator,
+    PlaywrightStateFingerprinter,
+)
 
 __all__ = [
     "UIStateMachineDiscovery",
+    "StateClassifier",
+    "UIMapLoader",
     "AriaSnapshotCapture",
     "ElementLocator",
+    "PlaywrightStateFingerprinter",
 ]
 

@@ -1,9 +1,11 @@
-"""
-Automatic UI discovery and crawling.
-"""
+"""Discovery module for AriaStateMapper."""
 
-from .state_machine_discovery import UIStateMachineDiscovery
-from .ui_crawler import UICrawler
+from aria_state_mapper.discovery.state_machine_discovery import UIStateMachineDiscovery
+from aria_state_mapper.discovery.state_classifier import StateClassifier
+from aria_state_mapper.discovery.ui_map_loader import UIMapLoader
 
-__all__ = ["UIStateMachineDiscovery", "UICrawler"]
-
+__all__ = [
+    "UIStateMachineDiscovery",
+    "StateClassifier",
+    "UIMapLoader",
+]

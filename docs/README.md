@@ -4,36 +4,34 @@
 
 Welcome to the StateExplorer documentation. This directory contains comprehensive documentation for all packages in the monorepo.
 
+## Quick Start
+
+- **New users**: Start with [Getting Started Guide](./guides/GETTING_STARTED.md)
+- **Migrating from original**: See [Migration Guide](./MIGRATION_GUIDE.md)
+- **Understanding the approach**: Read [Architecture Overview](./architecture/)
+
 ## Documentation Structure
 
 ### Architecture
-- `architecture/` - System architecture and design decisions
-  - Component interactions
-  - Data flow diagrams
-  - Design patterns
+Core design principles and system architecture:
 
-### Research
-- `research/` - Research findings and validation results
-  - Accessibility tree strategy
-  - Weighted fuzzy matching validation
-  - Browser back navigation study
-  - State fingerprinting research
-
-### API Reference
-- `api/` - API documentation for all packages
-  - ModelResilienceCore API
-  - AriaStateMapper API
-  - AppStateMapper API (future)
+- [Fingerprinting Strategy](./architecture/FINGERPRINTING_STRATEGY.md) - Accessibility tree-based state identification
+- [FSM vs POM](./architecture/FSM_VS_POM.md) - Behavioral vs structural modeling comparison
+- [Resilience Principles](./architecture/RESILIENCE_PRINCIPLES.md) - Building maintainable UI tests
 
 ### Guides
-- `guides/` - User guides and tutorials
-  - Getting started
-  - Configuration
-  - Best practices
-  - Troubleshooting
+Practical how-to documentation:
+
+- [Getting Started](./guides/GETTING_STARTED.md) - Quick start and basic usage
+- [Migration Guide](./MIGRATION_GUIDE.md) - Migrating from original `ui_mbt_discovery.py`
+
+### Research
+Theoretical foundations and validation:
+
+- [Model-Based Testing](./research/MODEL_BASED_TESTING.md) - MBT principles and algorithms
 
 ### Examples
-- See `../examples/` directory for code examples
+- See `../examples/` directory for complete code examples
 
 ## Quick Links
 
