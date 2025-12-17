@@ -44,43 +44,72 @@ playwright install firefox
 
 ## Usage
 
-### Automatic Discovery
+### Basic Discovery
+
+```bash
+# Run automatic discovery from scratch
+aria-discover --url http://localhost:3000 \
+  --username admin \
+  --password admin \
+  --output fsm_graph.json \
+  --max-states 50
+```
+
+### Incremental Discovery (NEW in v0.2.0)
+
+**Start from an existing FSM graph and expand it:**
+
+```bash
+# Continue from manually captured graph
+aria-discover --url http://localhost:3000 \
+  --username admin \
+  --password admin \
+  --seed-graph fsm_graph_augmented.json \
+  --output fsm_graph_expanded.json \
+  --max-states 50
+```
+
+**How it works:**
+1. **Loads seed graph** into memory (states + transitions)
+2. **Reads live UI** via accessibility tree during exploration
+3. **Compares** current UI fingerprint against seeded states
+4. **Reuses** state_id if similarity > 80% (prevents duplicates)
+5. **Creates** new states for UI not in seed graph
+6. **Updates** metadata for matched states (detects UI changes)
+
+**Benefits:**
+- ✅ Combines manual depth (complex workflows) with automated breadth (coverage)
+- ✅ Preserves manually captured metadata (action descriptions)
+- ✅ Prevents duplicate states through fingerprint-based deduplication
+- ✅ **Detects UI changes** - updates element descriptors if UI evolved
+- ✅ **Self-healing** - adapts to URL changes and new elements
+- ✅ Enables iterative graph building over time
+
+**Important**: The seed graph is a **knowledge base for comparison**, not a navigation map. Discovery always reads the **live accessibility tree**, comparing it against seeded states to detect matches and changes.
+
+### Python API
 
 ```python
 from aria_state_mapper import UIStateMachineDiscovery
 
 # Create discovery engine
 discovery = UIStateMachineDiscovery(
-    base_url="https://example.com",
-    username="admin",
-    password="password"
+    base_url="http://localhost:3000",
+    headless=True,
+    max_states=50
 )
+
+# Seed from existing graph (optional)
+discovery.seed_from_fsm_graph("fsm_graph_augmented.json")
 
 # Run discovery
 await discovery.discover(
-    max_states=50,
-    strategy="dfs"  # or "bfs"
+    username="admin",
+    password="admin"
 )
 
-# Export FSM graph
-graph = discovery.export_graph()
-```
-
-### Command Line
-
-```bash
-# Run automatic discovery
-python -m aria_state_mapper.discovery \
-  --url https://example.com \
-  --username admin \
-  --password password \
-  --output fsm_graph.json \
-  --max-states 50
-
-# With manual action recording
-python -m aria_state_mapper.recording \
-  --url https://example.com \
-  --output manual_actions.json
+# Export enhanced graph
+graph = discovery._export_to_graph()
 ```
 
 ## Architecture
@@ -114,19 +143,58 @@ config = {
 discovery = UIStateMachineDiscovery(config=config)
 ```
 
-## Two-Stage Pipeline
+## Common Workflows
 
-AriaStateMapper can be used in a two-stage pipeline:
+### Workflow 1: Manual → Automated Enhancement
 
-1. **Stage 1**: Fast structural crawl (POM approach)
-2. **Stage 2**: Deep behavioral modeling (FSM approach)
+Combine manual recording depth with automated breadth:
 
 ```bash
-# Stage 1: Quick structural discovery
-python -m aria_state_mapper.discovery --quick --output ui_map.json
+# Step 1: Manual recording (using manual_fsm_augmentation.py)
+# Result: fsm_graph_augmented.json (21 states with complex interactions)
 
-# Stage 2: Deep FSM modeling (seeded from Stage 1)
-python -m aria_state_mapper.discovery --seed ui_map.json --output fsm_graph.json
+# Step 2: Automated expansion
+aria-discover --url http://localhost:3000 \
+  --username admin \
+  --password admin \
+  --seed-graph fsm_graph_augmented.json \
+  --output fsm_graph_full.json \
+  --max-states 50
+
+# Result: 40+ states (21 manual + 20+ automated)
+```
+
+### Workflow 2: Iterative Development
+
+Build graph incrementally:
+
+```bash
+# Week 1: Basic discovery
+aria-discover --url http://localhost:3000 \
+  --output week1.json --max-states 10
+
+# Week 2: Add manual depth
+# (Use manual recording tool on week1.json)
+
+# Week 3: Automated expansion
+aria-discover --url http://localhost:3000 \
+  --seed-graph week2.json \
+  --output week3.json --max-states 30
+```
+
+### Workflow 3: Graph Refresh
+
+Update graph as UI evolves:
+
+```bash
+# Initial discovery (3 months ago)
+aria-discover --url http://prod.example.com \
+  --output fsm_v1.json
+
+# Refresh after UI changes
+aria-discover --url http://prod.example.com \
+  --seed-graph fsm_v1.json \
+  --output fsm_v2.json
 ```
 
 ## Research Validation
