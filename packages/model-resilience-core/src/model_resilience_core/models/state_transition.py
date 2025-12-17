@@ -35,6 +35,28 @@ class StateTransition:
         success_rate: Historical success rate of this transition (0.0-1.0)
         metadata: Additional transition-specific metadata
         timestamp: When this transition was discovered
+    
+    Conditional Transitions (Guards):
+        When the same action can lead to different states based on system conditions
+        (e.g., "Summon CPE" → success if online, failure if offline), use guard
+        conditions in metadata:
+        
+        metadata = {
+            "guard": {
+                "condition": "cpe_online",  # e.g., "cpe_offline", "authenticated"
+                "type": "precondition",     # or "postcondition", "invariant"
+                "description": "CPE must be online and responding",
+                "testbed_requirement": "Power on CPE and connect to network",
+                "verification": "Check CPE status via NBI GetParameterValues"
+            },
+            "expected_outcome": "success"  # or "failure", "timeout", "error"
+        }
+        
+        This enables:
+        - Explicit modeling of if-then-else logic
+        - Parameterized test generation for all branches
+        - Coverage tracking (both paths tested?)
+        - Self-documenting testbed requirements
     """
     
     transition_id: str
@@ -71,4 +93,25 @@ class StateTransition:
             and self.to_state_id == other.to_state_id
             and str(self.action_type) == str(other.action_type)
         )
+    
+    # Guard condition helpers
+    @property
+    def has_guard(self) -> bool:
+        """Check if this transition has a guard condition."""
+        return "guard" in self.metadata
+    
+    @property
+    def guard_condition(self) -> Optional[str]:
+        """Get the guard condition name (e.g., 'cpe_online', 'authenticated')."""
+        return self.metadata.get("guard", {}).get("condition")
+    
+    @property
+    def expected_outcome(self) -> Optional[str]:
+        """Get expected outcome (e.g., 'success', 'failure', 'timeout')."""
+        return self.metadata.get("expected_outcome")
+    
+    @property
+    def is_conditional(self) -> bool:
+        """Check if this is part of a conditional transition (same trigger, different outcomes)."""
+        return self.has_guard or "expected_outcome" in self.metadata
 

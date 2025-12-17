@@ -85,34 +85,106 @@ class UIStateMachineDiscovery:
         self.username: str | None = None
         self.password: str | None = None
         
-        # Map-seeded data
-        self.known_states: dict[str, UIState] = {}
-        self.known_transitions: list[StateTransition] = []
+        # Track seeded states for verification
+        self.seeded_states: set[str] = set()
+        self.seeded_state_status: dict[str, str] = {}  # state_id → "unchanged"|"modified"|"removed"|"unreachable"
         
         # Create fingerprinter and comparer instances
         self.fingerprinter = PlaywrightStateFingerprinter()
         self.comparer = StateComparer()
 
-    def seed_from_map(self, map_path: str):
-        """Seed the FSM with states and transitions from ui_map.json.
+    def seed_from_fsm_graph(self, graph_path: str):
+        """Seed the FSM with states and transitions from existing FSM graph JSON.
+        
+        This enables incremental discovery, allowing you to:
+        1. Start from a manually captured graph and expand it automatically
+        2. Refresh an existing graph as the UI evolves
+        3. Build graphs iteratively over time
         
         Args:
-            map_path: Path to ui_map.json file
-        """
-        from aria_state_mapper.discovery.ui_map_loader import UIMapLoader
-        
-        map_data = UIMapLoader.load_map(map_path)
-        if not map_data:
-            return
+            graph_path: Path to FSM graph JSON file
             
-        seeded_states = UIMapLoader.extract_states(map_data)
-        logger.info("Seeding FSM with %d states from map", len(seeded_states))
+        Example:
+            # Load manually captured graph and expand it
+            tool = UIStateMachineDiscovery("http://localhost:3000")
+            tool.seed_from_fsm_graph("fsm_graph_augmented.json")
+            await tool.discover()  # Continues from 21 existing states
+        """
+        graph_path_obj = Path(graph_path)
+        if not graph_path_obj.exists():
+            logger.error("Graph file not found: %s", graph_path)
+            return
         
-        for state in seeded_states:
-            self.known_states[state.state_id] = state
-            # Also add to active states, treating them as "discovered" but unverified
-            if state.state_id not in self.states:
+        try:
+            with graph_path_obj.open("r") as f:
+                graph_data = json.load(f)
+            
+            # Validate basic structure
+            if "nodes" not in graph_data or "edges" not in graph_data:
+                logger.error("Invalid FSM graph format: missing 'nodes' or 'edges'")
+                return
+            
+            # Load states from nodes
+            nodes = graph_data.get("nodes", [])
+            for node in nodes:
+                if node.get("node_type") != "state":
+                    continue
+                
+                # Reconstruct UIState object
+                state = UIState(
+                    state_id=node["id"],
+                    state_type=node.get("state_type", "unknown"),
+                    fingerprint=node.get("fingerprint", {}),
+                    verification_logic=node.get("verification_logic", {}),
+                    element_descriptors=node.get("element_descriptors", {}),
+                    discovered_at=node.get("discovered_at", "")
+                )
+                
+                # Add to states dictionary
                 self.states[state.state_id] = state
+                
+                # Track as seeded (needs verification)
+                self.seeded_states.add(state.state_id)
+                
+                # DON'T add to visited_states yet - will be added after verification
+                # DON'T add to queue - verification phase will handle this
+            
+            # Load transitions from edges
+            edges = graph_data.get("edges", [])
+            for edge in edges:
+                if edge.get("edge_type") != "transition":
+                    continue
+                
+                # Reconstruct StateTransition object
+                transition = StateTransition(
+                    transition_id=edge.get("transition_id", ""),
+                    from_state_id=edge.get("source", ""),
+                    to_state_id=edge.get("target", ""),
+                    action_type=edge.get("action_type", ActionType.NAVIGATE),
+                    trigger_locators=edge.get("trigger_locators", {}),
+                    action_data=edge.get("action_data", {}),
+                    success_rate=edge.get("success_rate", 1.0)
+                )
+                
+                # Add to transitions list
+                self.transitions.append(transition)
+                
+                # Add to signature set to prevent duplicates
+                signature = (
+                    transition.from_state_id,
+                    transition.action_type,
+                    transition.to_state_id
+                )
+                self.transition_signatures.add(signature)
+            
+            logger.info("Seeded FSM from graph: %d states, %d transitions loaded from %s", 
+                       len(self.states), len(self.transitions), graph_path)
+            logger.info("Incremental discovery will continue from these states")
+            
+        except json.JSONDecodeError as e:
+            logger.error("Failed to parse FSM graph JSON: %s", e)
+        except Exception as e:
+            logger.error("Failed to load FSM graph: %s", e)
 
         
     async def discover(
@@ -169,6 +241,11 @@ class UIStateMachineDiscovery:
                 logger.info("Starting exploration from: %s (%s)", 
                            current_state.state_id, current_state.state_type)
                 self.state_queue.append(current_state.state_id)
+                
+                # Verify seeded states first (if seed graph was loaded)
+                if self.seeded_states:
+                    logger.info("Verifying %d seeded states before exploration...", len(self.seeded_states))
+                    await self._verify_seeded_states(page)
                 
                 # Choose exploration strategy
                 if self.use_dfs:
@@ -672,6 +749,175 @@ class UIStateMachineDiscovery:
         except Exception as e:
             logger.debug("Error getting element descriptor: %s", e)
             return {}
+    
+    def _detect_conditional_transition(self, new_transition: StateTransition) -> None:
+        """
+        Detect if a new transition creates a conditional scenario.
+        
+        A conditional transition occurs when the same trigger (locator/button) from
+        the same source state can lead to different target states. This typically
+        happens when the outcome depends on system conditions (e.g., CPE online/offline).
+        
+        Args:
+            new_transition: The newly discovered transition to check
+        """
+        # Find existing transitions with same source and similar trigger
+        from_state = new_transition.from_state_id
+        new_trigger_str = str(new_transition.trigger_locators.get("locator_strategy", ""))
+        
+        for existing in self.transitions:
+            if existing.from_state_id != from_state:
+                continue
+            
+            # Check if triggers are similar
+            existing_trigger_str = str(existing.trigger_locators.get("locator_strategy", ""))
+            
+            # Simple heuristic: same button/link name
+            if new_trigger_str and existing_trigger_str and new_trigger_str == existing_trigger_str:
+                # Same trigger, different target → conditional!
+                if existing.to_state_id != new_transition.to_state_id:
+                    logger.warning(
+                        "Conditional transition detected: %s → [%s OR %s] (same trigger)",
+                        from_state,
+                        existing.to_state_id,
+                        new_transition.to_state_id
+                    )
+                    logger.info(
+                        "  This transition depends on system conditions outside UI control."
+                    )
+                    logger.info(
+                        "  Consider adding guard conditions to document the requirements."
+                    )
+                    
+                    # Mark both transitions as conditional if not already marked
+                    if not existing.is_conditional:
+                        if "metadata" not in existing.metadata:
+                            existing.metadata["note"] = "Conditional transition detected during discovery"
+                    
+                    if "metadata" not in new_transition.metadata:
+                        new_transition.metadata = {}
+                    new_transition.metadata["note"] = "Conditional transition detected during discovery"
+                    
+                    break
+    
+    async def _verify_seeded_states(self, page: Page):
+        """Verify all seeded states by navigating to them and comparing fingerprints.
+        
+        This is critical for manual recording: manually captured states (dropdowns,
+        overlays, forms) must be verified against the live UI to ensure they still
+        exist and haven't changed.
+        
+        Args:
+            page: Playwright Page object
+        """
+        logger.info("=" * 70)
+        logger.info("SEED VERIFICATION PHASE")
+        logger.info("=" * 70)
+        logger.info("Verifying %d seeded states...", len(self.seeded_states))
+        
+        verified_count = 0
+        unchanged_count = 0
+        modified_count = 0
+        removed_count = 0
+        unreachable_count = 0
+        
+        for state_id in self.seeded_states:
+            state = self.states[state_id]
+            logger.info("Verifying state: %s (%s)", state_id, state.state_type)
+            
+            # Try to navigate to this state using URL pattern
+            try:
+                url_pattern = state.fingerprint.get("url_pattern", "")
+                if url_pattern and url_pattern != "root":
+                    # Try direct URL navigation
+                    target_url = f"{self.base_url}/#{url_pattern}"
+                    logger.debug("  Navigating to: %s", target_url)
+                    await page.goto(target_url, wait_until='networkidle', timeout=5000)
+                    await self._wait_for_stable_state(page)
+                elif url_pattern == "root":
+                    # Navigate to base URL
+                    await page.goto(self.base_url, wait_until='networkidle', timeout=5000)
+                    await self._wait_for_stable_state(page)
+                else:
+                    # No URL pattern - try to find transition to this state
+                    logger.debug("  No URL pattern, checking transitions...")
+                    incoming_transitions = [t for t in self.transitions if t.to_state_id == state_id]
+                    if not incoming_transitions:
+                        logger.warning("  ⚠️  No way to reach %s - marking as unreachable", state_id)
+                        self.seeded_state_status[state_id] = "unreachable"
+                        unreachable_count += 1
+                        # Keep in states but don't mark as visited
+                        continue
+                
+                # Read current UI state
+                current_fingerprint = await self.fingerprinter.create_fingerprint(page)
+                
+                # Compare with seeded fingerprint
+                seed_fingerprint = state.fingerprint
+                similarity = self.comparer.calculate_similarity(
+                    current_fingerprint,
+                    seed_fingerprint
+                )
+                
+                # Determine status based on similarity
+                if similarity >= 0.95:
+                    # Unchanged - very high similarity
+                    self.seeded_state_status[state_id] = "unchanged"
+                    logger.info("  ✓ UNCHANGED: %s (%.1f%% similar)", state_id, similarity * 100)
+                    unchanged_count += 1
+                    verified_count += 1
+                    # Mark as visited
+                    self.visited_states.add(state_id)
+                    
+                elif similarity >= 0.75:
+                    # Modified - structure changed but still recognizable
+                    self.seeded_state_status[state_id] = "modified"
+                    logger.warning("  ⚠️  MODIFIED: %s (%.1f%% similar) - Updating fingerprint", 
+                                 state_id, similarity * 100)
+                    modified_count += 1
+                    verified_count += 1
+                    
+                    # Update fingerprint with current UI
+                    state.fingerprint = current_fingerprint
+                    
+                    # Update element descriptors
+                    actionable = current_fingerprint.get("actionable_elements", {})
+                    state.element_descriptors = (
+                        actionable.get("buttons", []) + 
+                        actionable.get("links", []) + 
+                        actionable.get("inputs", [])
+                    )
+                    
+                    # Mark as visited
+                    self.visited_states.add(state_id)
+                    
+                else:
+                    # Removed - similarity too low, state no longer exists
+                    self.seeded_state_status[state_id] = "removed"
+                    logger.error("  ✗ REMOVED: %s (%.1f%% similar) - State no longer exists or drastically changed", 
+                               state_id, similarity * 100)
+                    removed_count += 1
+                    # Don't mark as visited - will be excluded from exploration
+                    
+            except Exception as e:
+                logger.error("  ✗ ERROR verifying %s: %s", state_id, str(e))
+                self.seeded_state_status[state_id] = "unreachable"
+                unreachable_count += 1
+        
+        # Summary
+        logger.info("=" * 70)
+        logger.info("SEED VERIFICATION SUMMARY")
+        logger.info("=" * 70)
+        logger.info("Total seeded states: %d", len(self.seeded_states))
+        logger.info("  ✓ Unchanged: %d", unchanged_count)
+        logger.info("  ⚠️  Modified: %d (fingerprints updated)", modified_count)
+        logger.info("  ✗ Removed: %d (marked for review)", removed_count)
+        logger.info("  ⚠️  Unreachable: %d (no navigation path)", unreachable_count)
+        logger.info("  Total verified: %d", verified_count)
+        logger.info("=" * 70)
+        
+        if removed_count > 0 or unreachable_count > 0:
+            logger.warning("Some seeded states could not be verified. Review the output for details.")
     
     async def _explore_states_dfs(self, page: Page):
         """Depth-First Search exploration - explore deeply before broadly.
@@ -1396,6 +1642,10 @@ class UIStateMachineDiscovery:
                     action_type="navigate",
                     trigger_locators=link_info,
                 )
+                
+                # Check if this creates a conditional transition
+                self._detect_conditional_transition(transition)
+                
                 self.transitions.append(transition)
                 self.transition_signatures.add(transition_sig)
                 
@@ -1669,7 +1919,7 @@ class UIStateMachineDiscovery:
                 "success_rate": transition.success_rate,
             })
         
-        return {
+        graph_data = {
             "base_url": self.base_url,
             "graph_type": "fsm_mbt",
             "discovery_method": "playwright_state_machine_dfs" if self.use_dfs else "playwright_state_machine_bfs",
@@ -1682,6 +1932,26 @@ class UIStateMachineDiscovery:
                 "state_types": self._get_state_type_distribution(),
             }
         }
+        
+        # Add seed verification results if applicable
+        if self.seeded_states:
+            unchanged_count = sum(1 for s in self.seeded_state_status.values() if s == "unchanged")
+            modified_count = sum(1 for s in self.seeded_state_status.values() if s == "modified")
+            removed_count = sum(1 for s in self.seeded_state_status.values() if s == "removed")
+            unreachable_count = sum(1 for s in self.seeded_state_status.values() if s == "unreachable")
+            verified_count = unchanged_count + modified_count
+            
+            graph_data["seed_verification"] = {
+                "seeded_state_count": len(self.seeded_states),
+                "verified_count": verified_count,
+                "unchanged_count": unchanged_count,
+                "modified_count": modified_count,
+                "removed_count": removed_count,
+                "unreachable_count": unreachable_count,
+                "state_status": self.seeded_state_status
+            }
+        
+        return graph_data
     
     def _get_state_type_distribution(self) -> dict[str, int]:
         """Get distribution of state types.

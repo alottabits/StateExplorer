@@ -78,8 +78,8 @@ def main():
         help="Use Breadth-First Search instead of Depth-First Search (default: DFS)",
     )
     parser.add_argument(
-        "--seed-map",
-        help="Path to ui_map.json to seed the FSM with known states",
+        "--seed-graph",
+        help="Path to existing FSM graph JSON to use as starting point for incremental discovery",
     )
 
     args = parser.parse_args()
@@ -94,10 +94,11 @@ def main():
         use_dfs=not args.use_bfs,  # Default to DFS
     )
     
-    # Seed from map if provided
-    if args.seed_map:
-        tool.seed_from_map(args.seed_map)
-
+    # Seed from FSM graph if provided
+    if args.seed_graph:
+        logger.info("Loading seed graph from: %s", args.seed_graph)
+        tool.seed_from_fsm_graph(args.seed_graph)
+        logger.info("Incremental discovery mode enabled")
 
     # Run discovery
     logger.info("Starting FSM/MBT discovery for %s", args.url)
