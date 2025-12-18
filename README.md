@@ -65,6 +65,44 @@ Appium-based state mapper for native applications (iOS, Android, Linux, Windows)
                     └──────────────────┘
 ```
 
+## Quick Start
+
+### Complete End-to-End Workflow
+
+For a **step-by-step guide** covering the complete workflow from fresh discovery to manual recording to incremental discovery, see:
+
+📖 **[Complete Workflow Guide](COMPLETE_WORKFLOW_GUIDE.md)**
+
+This comprehensive guide walks you through:
+1. **Fresh Automated Discovery** - Capture base states (10-15 states)
+2. **Manual Recording** - Add complex interactions (dropdowns, overlays)
+3. **Incremental Discovery** - Expand to comprehensive coverage (40+ states)
+
+**Time**: ~30 minutes total | **Result**: Production-ready FSM graph
+
+### Basic Usage
+
+```bash
+# 1. Install packages
+pip install -e packages/model-resilience-core/
+pip install -e packages/aria-state-mapper/
+
+# 2. Install Playwright browsers
+playwright install chromium firefox
+
+# 3. Run automated discovery
+aria-discover --url http://localhost:3000 --output fsm_graph.json
+
+# 4. Manual recording (optional - for complex interactions)
+python tools/manual_fsm_augmentation.py \
+  --input fsm_graph.json \
+  --output fsm_graph_augmented.json
+
+# 5. Incremental discovery (optional - expand coverage)
+aria-discover --seed-graph fsm_graph_augmented.json \
+  --output fsm_graph_expanded.json
+```
+
 ## Development Setup
 
 ```bash
